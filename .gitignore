@@ -1,0 +1,97 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual Environment
+venv/
+env/
+ENV/
+
+# Generated outputs
+outputs/*.pdf
+outputs/*.csv
+outputs/*.json
+
+# Scraped data
+data/*.json
+data/*.csv
+data/*.xml
+
+# Downloaded images
+images/*.jpg
+images/*.jpeg
+images/*.png
+images/*.webp
+images/*.gif
+
+# Logs
+logs/*.log
+*.log
+
+# Configuration files with sensitive information
+config_local.json
+.env
+.env.local
+.env.production
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# Linux
+*~
+
+# Cache files
+.cache/
+*.cache
+
+# API keys and secrets
+*.key
+secrets.json
+api_keys.json
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+
+# Backup files
+*.bak
+*.backup
+
+# Test files
+test_*.py
+*_test.py
