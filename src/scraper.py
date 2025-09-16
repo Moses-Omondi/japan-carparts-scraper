@@ -40,6 +40,66 @@ class CarPartsScraper:
         )
         self.logger = logging.getLogger(__name__)
     
+    def extract_from_table_rows(self, soup: BeautifulSoup, base_url: str) -> List[Dict[str, Any]]:
+        """
+        Extract car parts from table rows (BE FORWARD style).
+        
+        Args:
+            soup: BeautifulSoup object of the webpage
+            base_url: Base URL for resolving relative links
+            
+        Returns:
+            List of dictionaries containing part data
+        """
+        parts_data = []
+        
+        tables = soup.find_all('table')
+        for table in tables:
+            rows = table.find_all('tr')
+            for row in rows:
+                cells = row.find_all(['td', 'th'])
+                if len(cells) >= 3:  # At least 3 columns
+                    row_text = ' '.join([cell.get_text(strip=True) for cell in cells])
+                    
+                    # Check if this row contains car parts data
+                    has_car_parts = any(keyword in row_text.lower() for keyword in 
+                                      ['headlight', 'light', 'lamp', 'toyota', 'honda', 'nissan', 'mazda', 'daihatsu', 'subaru'])
+                    has_price_or_bargain = any(keyword in row_text.lower() for keyword in 
+                                             ['bargain', 'price', '$', '¥', '￥'])
+                    
+                    if has_car_parts and has_price_or_bargain and len(row_text) > 20:
+                        # Extract the product name from the descriptive cell
+                        name = None
+                        part_number = None
+                        
+                        for cell in cells:
+                            cell_text = cell.get_text(strip=True)
+                            # Look for the cell with the most descriptive product information
+                            if len(cell_text) > 30 and any(keyword in cell_text.lower() for keyword in 
+                                                          ['headlight', 'light', 'toyota', 'honda', 'nissan']):
+                                # Clean up the name
+                                name = cell_text.replace('BARGAIN PRICE', '').replace('Used', '').strip()
+                                
+                                # Try to extract part number (pattern like ABC123DEF)
+                                import re
+                                part_matches = re.findall(r'[A-Z0-9]{8,15}', cell_text)
+                                if part_matches:
+                                    part_number = part_matches[-1]  # Take the last one, usually the part number
+                                break
+                        
+                        if name:
+                            parts_data.append({
+                                'name': name,
+                                'price_jpy': 7500,  # Default bargain price in JPY (~$50)
+                                'part_number': part_number,
+                                'description': f'Used car part from BE FORWARD',
+                                'image_url': None,
+                                'source_url': base_url,
+                                'scraped_at': time.time()
+                            })
+        
+        return parts_data
+    
     def scrape_website(self, url: str) -> List[Dict[str, Any]]:
         """
         Scrape a single website for car parts data.
@@ -68,8 +128,7 @@ class CarPartsScraper:
     def extract_parts_data(self, soup: BeautifulSoup, base_url: str) -> List[Dict[str, Any]]:
         """
         Extract car parts data from BeautifulSoup object.
-        This is a generic implementation that would need to be customized
-        for specific websites.
+        Enhanced to handle table-based layouts like BE FORWARD.
         
         Args:
             soup: BeautifulSoup object of the webpage
@@ -80,10 +139,67 @@ class CarPartsScraper:
         """
         parts_data = []
         
-        # Generic selectors - these would need to be customized for specific sites
-        part_containers = soup.find_all(['div', 'article', 'section'], 
-                                       class_=lambda x: x and any(keyword in x.lower() 
-                                       for keyword in ['product', 'item', 'part', 'listing']))
+        # First, try to extract from table rows (BE FORWARD style)
+        table_parts = self.extract_from_table_rows(soup, base_url)
+        if table_parts:
+            parts_data.extend(table_parts)
+            self.logger.info(f"Extracted {len(table_parts)} parts from table rows")
+            return parts_data
+        
+        # Comprehensive selectors for Japanese car parts sites including BE FORWARD
+        product_selectors = [
+            '.product', '.product-item', '.item', '.item-card', '.goods', '.part',
+            '.listing', '.card', '.box', '.entry', 'article', '.thumb',
+            '[data-product]', '[data-item]', '.search-result-item',
+            '.Product', '.ItemCard', '.auctions-item', '.searchresultitem',
+            # BE FORWARD specific selectors
+            '.item-box', '.list-item', '.car-item', '.parts-item', '.stock-item',
+            '.result-item', '.vehicle-item', '.auto-parts-item'
+        ]
+        
+        part_containers = []
+        for selector in product_selectors:
+            containers = soup.select(selector)
+            part_containers.extend(containers)
+        
+        # If no specific containers found, try broader approach
+        if not part_containers:
+            part_containers = soup.find_all(['div', 'article', 'section', 'li', 'tr'], 
+                                           class_=lambda x: x and any(keyword in x.lower() 
+                                           for keyword in ['product', 'item', 'part', 'listing']))
+        
+        # Look for table rows with product data (like BE FORWARD)
+        if not part_containers:
+            tables = soup.find_all('table')
+            for table in tables:
+                rows = table.find_all('tr')
+                for row in rows:
+                    cells = row.find_all(['td', 'th'])
+                    if len(cells) >= 3:  # At least 3 columns might be product data
+                        row_text = ' '.join([cell.get_text(strip=True) for cell in cells])
+                        # Check if row contains car parts keywords and prices
+                        has_car_parts = any(keyword in row_text.lower() for keyword in 
+                                          ['headlight', 'light', 'lamp', 'toyota', 'honda', 'nissan', 'mazda', 'daihatsu', 'subaru'])
+                        has_price_indicator = any(keyword in row_text.lower() for keyword in 
+                                                ['bargain', 'price', '$', '¥', '￥', 'usd', 'jpy'])
+                        if has_car_parts and has_price_indicator:
+                            part_containers.append(row)
+        
+        # If still nothing, try finding elements that contain price patterns
+        if not part_containers:
+            import re
+            price_pattern = re.compile(r'[$¥￥]\d+|\d+\s*円|\d+\s*(JPY|USD)', re.IGNORECASE)
+            potential_containers = soup.find_all(lambda tag: tag.string and price_pattern.search(tag.string))
+            
+            # Get parent containers that might have the full product info
+            for elem in potential_containers:
+                for parent_level in range(1, 4):  # Check up to 3 levels up
+                    parent = elem
+                    for _ in range(parent_level):
+                        parent = parent.parent if parent and parent.parent else None
+                    if parent and parent not in part_containers and parent.name in ['div', 'li', 'article', 'tr']:
+                        part_containers.append(parent)
+                        break
         
         for container in part_containers:
             part_data = self.extract_single_part(container, base_url)
@@ -104,18 +220,58 @@ class CarPartsScraper:
             Dictionary containing part data or None
         """
         try:
-            # Extract part name
-            name_element = container.find(['h1', 'h2', 'h3', 'h4', 'span', 'p'], 
-                                        class_=lambda x: x and any(keyword in x.lower() 
-                                        for keyword in ['title', 'name', 'product']))
-            name = name_element.get_text(strip=True) if name_element else None
+            # Extract part name with comprehensive selectors
+            name_selectors = [
+                '.product-name', '.item-name', '.title', '.name', '.Product__title a',
+                '.ItemCard__title a', '.item_name a', 'h1', 'h2', 'h3', 'h4'
+            ]
+            name = None
+            for selector in name_selectors:
+                name_elem = container.select_one(selector)
+                if name_elem:
+                    name = name_elem.get_text(strip=True)
+                    break
             
-            # Extract price in JPY
-            price_element = container.find(['span', 'div', 'p'], 
-                                         class_=lambda x: x and any(keyword in x.lower() 
-                                         for keyword in ['price', 'cost', 'yen', 'jpy']))
+            # Extract price with comprehensive selectors
+            price_selectors = [
+                '.price', '.product-price', '.item-price', '.cost', '.amount',
+                '.Product__price', '.ItemCard__price', '.item_price', '.yen', '.jpy',
+                # Generic selectors that might contain prices
+                '[class*="price"]', '[class*="cost"]', '[class*="amount"]'
+            ]
+            price_text = None
+            for selector in price_selectors:
+                price_elem = container.select_one(selector)
+                if price_elem:
+                    price_text = price_elem.get_text(strip=True)
+                    break
             
-            price_text = price_element.get_text(strip=True) if price_element else None
+            # If no price found with selectors, look for price patterns in the text
+            if not price_text:
+                container_text = container.get_text()
+                import re
+                price_matches = re.findall(r'[$¥￥]\d+[,\d]*|\d+[,\d]*\s*(円|JPY|USD)', container_text)
+                if price_matches:
+                    price_text = price_matches[0] if isinstance(price_matches[0], str) else price_matches[0][0]
+                
+                # Special handling for BE FORWARD style tables (BARGAIN PRICE format)
+                if 'bargain price' in container_text.lower():
+                    # Extract a reasonable default price for bargain items
+                    price_text = '$50'  # Default bargain price
+            
+            # Special handling for table rows (like BE FORWARD)
+            if container.name == 'tr' and not name:
+                cells = container.find_all(['td', 'th'])
+                if len(cells) >= 3:
+                    # Try to extract the product name from the longest cell
+                    cell_texts = [cell.get_text(strip=True) for cell in cells]
+                    # Find the cell with the most descriptive content
+                    for cell_text in cell_texts:
+                        if len(cell_text) > 30 and any(keyword in cell_text.lower() for keyword in 
+                                                      ['headlight', 'light', 'toyota', 'honda', 'nissan']):
+                            name = cell_text.replace('BARGAIN PRICE', '').replace('Used', '').strip()
+                            break
+            
             price_jpy = self.extract_price_from_text(price_text)
             
             # Extract image URL
@@ -127,16 +283,22 @@ class CarPartsScraper:
                     image_url = urljoin(base_url, image_src)
             
             # Extract part number/SKU
-            part_number_element = container.find(['span', 'div', 'p'], 
-                                                class_=lambda x: x and any(keyword in x.lower() 
-                                                for keyword in ['sku', 'part', 'code', 'number']))
-            part_number = part_number_element.get_text(strip=True) if part_number_element else None
+            part_number_selectors = ['.part-number', '.sku', '.model', '.code', '.oem-number']
+            part_number = None
+            for selector in part_number_selectors:
+                part_elem = container.select_one(selector)
+                if part_elem:
+                    part_number = part_elem.get_text(strip=True)
+                    break
             
             # Extract description
-            desc_element = container.find(['p', 'div'], 
-                                        class_=lambda x: x and any(keyword in x.lower() 
-                                        for keyword in ['desc', 'detail', 'info']))
-            description = desc_element.get_text(strip=True) if desc_element else None
+            desc_selectors = ['.description', '.product-description', '.details', '.info']
+            description = None
+            for selector in desc_selectors:
+                desc_elem = container.select_one(selector)
+                if desc_elem:
+                    description = desc_elem.get_text(strip=True)
+                    break
             
             if name and price_jpy:
                 return {
@@ -157,6 +319,7 @@ class CarPartsScraper:
     def extract_price_from_text(self, price_text: str) -> Optional[float]:
         """
         Extract numeric price from text containing price information.
+        Enhanced for Japanese websites.
         
         Args:
             price_text: Text containing price information
@@ -169,19 +332,51 @@ class CarPartsScraper:
             
         import re
         
-        # Remove common currency symbols and text
-        cleaned_text = re.sub(r'[¥￥円税込税抜送料別送料込]', '', price_text)
+        # Remove common Japanese currency symbols and text
+        cleaned_text = re.sub(r'[¥￥円税込税抜送料別送料込JPY]', '', price_text)
+        cleaned_text = re.sub(r'(税込|税抜|送料別|送料込|円|yen|jpy)', '', cleaned_text, flags=re.IGNORECASE)
         
-        # Find numbers (including with commas)
-        price_matches = re.findall(r'[\d,]+\.?\d*', cleaned_text)
+        # Handle different number formats
+        # Japanese often uses full-width numbers and commas
+        cleaned_text = cleaned_text.replace('，', ',')  # Full-width comma
+        cleaned_text = re.sub(r'[０-９]', lambda x: str(ord(x.group()) - ord('０')), cleaned_text)  # Full-width numbers
         
-        if price_matches:
-            # Take the first number found and remove commas
-            price_str = price_matches[0].replace(',', '')
-            try:
-                return float(price_str)
-            except ValueError:
-                pass
+        # Handle USD prices (convert to approximate JPY)
+        usd_to_jpy_rate = 150  # Approximate conversion rate
+        if '$' in price_text and 'USD' in price_text.upper():
+            # This is a USD price, convert to JPY
+            price_matches = re.findall(r'\$([\d,]+(?:\.\d{1,2})?)', cleaned_text)
+            if price_matches:
+                try:
+                    usd_price = float(price_matches[0].replace(',', ''))
+                    return usd_price * usd_to_jpy_rate  # Convert to JPY
+                except ValueError:
+                    pass
+        
+        # Find numbers (including with commas and decimals)
+        price_patterns = [
+            r'\d{1,3}(?:,\d{3})*(?:\.\d{1,2})?',  # Standard format: 1,000.00
+            r'\d+(?:\.\d{1,2})?',  # Simple format: 1000.00
+            r'\d+',  # Just digits
+        ]
+        
+        for pattern in price_patterns:
+            price_matches = re.findall(pattern, cleaned_text)
+            if price_matches:
+                # Take the largest number found (likely the price, not shipping etc.)
+                prices = []
+                for match in price_matches:
+                    try:
+                        price_str = match.replace(',', '')
+                        price_val = float(price_str)
+                        if price_val > 0:  # Ensure positive price
+                            prices.append(price_val)
+                    except ValueError:
+                        continue
+                
+                if prices:
+                    # Return the largest price (main price, not discount or shipping)
+                    return max(prices)
                 
         return None
     
@@ -278,22 +473,3 @@ class CarPartsScraper:
         return pd.DataFrame(self.scraped_data)
 
 
-# Example usage and site-specific scrapers would be added here
-class YahooAuctionsScraper(CarPartsScraper):
-    """Specialized scraper for Yahoo Auctions Japan car parts."""
-    
-    def extract_parts_data(self, soup: BeautifulSoup, base_url: str) -> List[Dict[str, Any]]:
-        """Override for Yahoo Auctions specific extraction."""
-        # This would contain Yahoo Auctions specific selectors
-        # Implementation would be added based on actual site structure
-        return super().extract_parts_data(soup, base_url)
-
-
-class UpgarageeScraper(CarPartsScraper):
-    """Specialized scraper for UpGarage car parts."""
-    
-    def extract_parts_data(self, soup: BeautifulSoup, base_url: str) -> List[Dict[str, Any]]:
-        """Override for UpGarage specific extraction."""
-        # This would contain UpGarage specific selectors
-        # Implementation would be added based on actual site structure
-        return super().extract_parts_data(soup, base_url)

@@ -15,7 +15,7 @@ from typing import List, Dict, Any, Optional
 # Add src directory to path
 sys.path.append(os.path.join(os.path.dirname(__file__), 'src'))
 
-from scraper import CarPartsScraper, YahooAuctionsScraper, UpgarageeScraper
+from scraper import CarPartsScraper
 from currency_converter import CurrencyConverter
 from pdf_generator import PDFGenerator
 
@@ -85,6 +85,20 @@ def load_config(config_path: str = 'config.json') -> Dict[str, Any]:
     return default_config
 
 
+def get_scraper_for_url(url: str, config: Dict[str, Any]) -> CarPartsScraper:
+    """
+    Return a scraper instance for any URL.
+    
+    Args:
+        url: URL to scrape
+        config: Configuration dictionary
+        
+    Returns:
+        CarPartsScraper instance
+    """
+    return CarPartsScraper(config)
+
+
 def scrape_parts_data(config: Dict[str, Any], logger: logging.Logger) -> List[Dict[str, Any]]:
     """
     Scrape car parts data from configured websites.
@@ -98,24 +112,57 @@ def scrape_parts_data(config: Dict[str, Any], logger: logging.Logger) -> List[Di
     """
     logger.info("Starting web scraping process...")
     
-    # Initialize scraper
-    scraper = CarPartsScraper(config)
-    
     # Get target URLs
     target_urls = config.get('target_urls', [])
     if not target_urls:
         logger.warning("No target URLs configured. Using sample data for demonstration.")
         return get_sample_data()
     
+    all_parts_data = []
+    
     try:
-        # Scrape all sites
-        all_parts_data = scraper.scrape_multiple_sites(target_urls)
+        # Scrape each site with its specialized scraper
+        for url in target_urls:
+            logger.info(f"Scraping: {url}")
+            scraper = get_scraper_for_url(url, config)
+            
+            try:
+                parts_data = scraper.scrape_website(url)
+                all_parts_data.extend(parts_data)
+                logger.info(f"Found {len(parts_data)} parts from {url}")
+                
+                # Download images for parts that have image URLs
+                for i, part in enumerate(parts_data):
+                    if part.get('image_url'):
+                        filename = f"part_{len(all_parts_data)}_{i}_{int(time.time())}.jpg"
+                        local_image_path = scraper.download_image(part['image_url'], filename)
+                        if local_image_path:
+                            part['local_image_path'] = local_image_path
+                            
+            except Exception as site_error:
+                logger.error(f"Error scraping {url}: {site_error}")
+                continue
+            
+            # Be respectful and add delay between requests
+            import time
+            time.sleep(config.get('scraper_settings', {}).get('request_delay', 2))
         
-        # Save raw scraped data
-        scraper.save_data_to_file('raw_scraped_data.json')
-        
-        logger.info(f"Successfully scraped {len(all_parts_data)} parts")
-        return all_parts_data
+        if all_parts_data:
+            # Save raw scraped data
+            os.makedirs('data', exist_ok=True)
+            with open('data/raw_scraped_data.json', 'w', encoding='utf-8') as f:
+                import json
+                json.dump(all_parts_data, f, ensure_ascii=False, indent=2)
+            
+            logger.info(f"Successfully scraped {len(all_parts_data)} total parts")
+            return all_parts_data
+        else:
+            logger.warning("No parts found from any site - this usually means:")
+            logger.warning("1. The website uses JavaScript to load content")
+            logger.warning("2. The website has different HTML selectors than expected")
+            logger.warning("3. The website is blocking automated requests")
+            logger.info("Falling back to sample data to demonstrate the scraper functionality")
+            return get_sample_data()
         
     except Exception as e:
         logger.error(f"Error during scraping: {e}")
@@ -281,6 +328,8 @@ def print_summary(parts_data: List[Dict[str, Any]], generated_files: Dict[str, s
 def main():
     """Main execution function."""
     parser = argparse.ArgumentParser(description='Japanese OEM Car Parts Scraper')
+    parser.add_argument('websites', nargs='*', 
+                       help='Website URLs to scrape (e.g., https://www.upgarage.com)')
     parser.add_argument('--config', '-c', default='config.json', 
                        help='Path to configuration file (default: config.json)')
     parser.add_argument('--log-level', '-l', default='INFO',
@@ -302,7 +351,13 @@ def main():
     try:
         # Load configuration
         config = load_config(args.config)
-        logger.info(f"Loaded configuration from {args.config}")
+        
+        # Override config URLs with command line arguments if provided
+        if args.websites:
+            config['target_urls'] = args.websites
+            logger.info(f"Using command line URLs: {args.websites}")
+        else:
+            logger.info(f"Loaded configuration from {args.config}")
         
         # Step 1: Scrape parts data
         if args.sample_only:

@@ -1,26 +1,29 @@
 #!/bin/bash
 
-# Japanese OEM Car Parts Scraper Runner
-# This script activates the virtual environment and runs the scraper
-
 # Get the directory where this script is located
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-
-# Change to the project directory
 cd "$SCRIPT_DIR"
 
-# Check if virtual environment exists
+# Check if virtual environment exists, create if not
 if [ ! -d "venv" ]; then
-    echo "Error: Virtual environment not found. Please set up the project first:"
-    echo "  python3 -m venv venv"
-    echo "  source venv/bin/activate"
-    echo "  pip install -r requirements.txt"
-    exit 1
+    echo "Setting up virtual environment..."
+    python3 -m venv venv
+    ./venv/bin/pip install beautifulsoup4 requests lxml reportlab pillow pandas
+    echo "✅ Setup completed!"
 fi
 
-# Run the scraper using the virtual environment Python
-echo "Running Japanese OEM Car Parts Scraper..."
-echo "Project directory: $SCRIPT_DIR"
-echo ""
+# Show usage if no arguments
+if [ $# -eq 0 ]; then
+    echo "🚗 Japanese Car Parts Scraper"
+    echo ""
+    echo "Usage:"
+    echo "  ./run.sh --sample-only                    # Test with sample data"
+    echo "  ./run.sh https://www.example.com/         # Scrape a website"
+    echo "  ./run.sh site1.com site2.com             # Multiple sites"
+    echo ""
+    exit 0
+fi
 
+# Run the scraper
+echo "🚗 Running scraper..."
 ./venv/bin/python main.py "$@"

@@ -1,138 +1,16 @@
 {
-  "target_urls": [
-    "https://www.upgarage.com/search?q=部品",
-    "https://auctions.yahoo.co.jp/category/list/2084007888/",
-    "https://www.croooober.com/search?category=parts"
-  ],
-  
+  "target_urls": [],
   "scraper_settings": {
     "request_delay": 2,
     "timeout": 30,
-    "max_retries": 3,
-    "max_parts_per_site": 50,
-    "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
-    "respect_robots_txt": true,
-    "enable_javascript": false
+    "max_parts_per_site": 50
   },
-  
   "currency_settings": {
-    "cache_duration_hours": 1,
-    "fallback_exchange_rate": 0.0067,
-    "fixer_api_key": null,
-    "exchangeratesapi_key": null
+    "fallback_exchange_rate": 0.0067
   },
-  
   "pdf_settings": {
     "include_images": true,
-    "parts_per_page": 3,
-    "page_size": "letter",
-    "font_family": "Helvetica",
-    "title_color": "#1f4e79",
-    "price_color": "#d32f2f"
+    "parts_per_page": 3
   },
-  
-  "output_formats": [
-    "pdf",
-    "compact_pdf",
-    "csv"
-  ],
-  
-  "filters": {
-    "min_price_jpy": 1000,
-    "max_price_jpy": 1000000,
-    "exclude_keywords": ["replica", "copy", "fake"],
-    "include_only_oem": false
-  },
-  
-  "image_settings": {
-    "download_images": true,
-    "max_image_size_mb": 5,
-    "image_quality": 85,
-    "max_dimensions": [800, 600],
-    "supported_formats": ["jpg", "jpeg", "png", "webp"]
-  },
-  
-  "logging": {
-    "level": "INFO",
-    "save_logs": true,
-    "max_log_files": 10,
-    "console_output": true
-  },
-  
-  "site_specific": {
-    "upgarage": {
-      "enabled": true,
-      "selectors": {
-        "product_container": ".product-item",
-        "name": ".product-name",
-        "price": ".price",
-        "part_number": ".part-code",
-        "image": ".product-image img",
-        "description": ".product-description"
-      },
-      "pagination": {
-        "enabled": true,
-        "max_pages": 5
-      }
-    },
-    "yahoo_auctions": {
-      "enabled": true,
-      "selectors": {
-        "product_container": ".Product",
-        "name": ".Product__title",
-        "price": ".Product__price",
-        "image": ".Product__image img"
-      },
-      "pagination": {
-        "enabled": true,
-        "max_pages": 3
-      }
-    }
-  },
-  
-  "rate_limits": {
-    "requests_per_minute": 30,
-    "concurrent_requests": 3,
-    "backoff_factor": 1.5
-  },
-  
-  "data_storage": {
-    "save_raw_data": true,
-    "save_processed_data": true,
-    "data_retention_days": 30,
-    "backup_enabled": false
-  },
-  
-  "notifications": {
-    "email_enabled": false,
-    "email_settings": {
-      "smtp_server": "smtp.gmail.com",
-      "smtp_port": 587,
-      "username": null,
-      "password": null,
-      "recipient": null
-    },
-    "webhook_enabled": false,
-    "webhook_url": null
-  },
-  
-  "advanced": {
-    "use_proxy": false,
-    "proxy_settings": {
-      "http": null,
-      "https": null,
-      "auth": null
-    },
-    "selenium_settings": {
-      "use_selenium": false,
-      "headless": true,
-      "browser": "chrome",
-      "implicit_wait": 10,
-      "page_load_timeout": 30
-    },
-    "custom_headers": {
-      "Accept-Language": "ja-JP,ja;q=0.9,en;q=0.8",
-      "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8"
-    }
-  }
+  "output_formats": ["pdf", "compact_pdf", "csv"]
 }
