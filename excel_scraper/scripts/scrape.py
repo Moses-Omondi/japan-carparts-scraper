@@ -102,6 +102,12 @@ Examples:
     )
     
     parser.add_argument(
+        '--full-catalog',
+        action='store_true',
+        help='Scrape entire catalog (ignores --max-products and --max-pages)'
+    )
+    
+    parser.add_argument(
         '--version',
         action='version',
         version='Excel Scraper 1.0.0'
@@ -170,8 +176,12 @@ async def run_scraper(args) -> int:
         start_time = time.time()
         print("🔄 Starting scraping...")
         
-        # Scrape website
-        products = await scraper.scrape_website_async(args.url)
+        # Scrape website - full catalog or limited
+        if args.full_catalog:
+            print("🌟 FULL CATALOG MODE - Scraping entire website...")
+            products = await scraper.scrape_full_catalog(args.url)
+        else:
+            products = await scraper.scrape_website_async(args.url)
         
         if products:
             print(f"✅ Found {len(products)} products!")

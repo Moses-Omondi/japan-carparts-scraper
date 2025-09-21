@@ -12,10 +12,7 @@ from bs4 import BeautifulSoup
 from urllib.parse import urljoin
 
 from .config import Config
-from .utils import (
-    setup_logging, extract_price_from_text, generate_filename, 
-    ensure_directory_exists, clean_product_name
-)
+from .utils import setup_logging, generate_filename, ensure_directory_exists, clean_product_name
 
 
 class FastExcelScraper:
@@ -89,136 +86,89 @@ class FastExcelScraper:
                 await asyncio.sleep(self.config.get('request_delay'))
     
     def extract_product_data(self, html: str, base_url: str) -> List[Dict[str, Any]]:
-        """
-        Extract product data from HTML.
-        
-        Args:
-            html: HTML content
-            base_url: Base URL for the page
-        
-        Returns:
-            List of extracted products
-        """
-        products = []
+        """Extract product data from HTML - Polish Venture optimized."""
         soup = BeautifulSoup(html, 'lxml')
-        
-        # Site-specific extraction
-        if 'polishventure.com' in base_url:
-            products = self._extract_polish_venture_products(soup, base_url)
-        else:
-            products = self._extract_generic_products(soup, base_url)
-        
-        return products
+        return self._extract_polish_venture_products(soup, base_url)
     
     def _extract_polish_venture_products(self, soup: BeautifulSoup, base_url: str) -> List[Dict[str, Any]]:
-        """Extract products from Polish Venture with detailed extraction."""
+        """Extract products from Polish Venture - optimized for speed."""
         products = []
         
-        # First extract product links for detailed scraping
+        # Extract product links for detailed scraping
         product_links = self._extract_product_links(soup, base_url)
         
         if product_links:
-            # Scrape detailed information from individual product pages
             max_products = self.config.get('max_products_per_page', 50)
             
             for i, product_url in enumerate(product_links[:max_products]):
-                self.logger.info(f"Extracting detailed Polish Venture product {i+1}/{min(len(product_links), max_products)}")
-                
                 # Extract detailed product data synchronously
                 product_data = self._extract_polish_venture_product_sync(product_url)
                 if product_data and product_data.get('name'):
                     products.append(product_data)
         
-        # Fallback to basic extraction if no detailed links found
-        if not products:
-            selectors = self.config.get('polish_venture.product_selectors')
-            
-            for selector in selectors:
-                product_elements = soup.select(selector)
-                if product_elements:
-                    for element in product_elements:
-                        product = self._extract_single_product(element, base_url)
-                        if product and product.get('name'):
-                            products.append(product)
-                    break
-        
         return products
     
-    def _extract_generic_products(self, soup: BeautifulSoup, base_url: str) -> List[Dict[str, Any]]:
-        """Extract products from generic sites."""
-        products = []
-        
-        selectors = ['[class*="product"]', '[class*="item"]', '[data-product]']
-        
-        for selector in selectors:
-            elements = soup.select(selector)
-            if len(elements) > 3:
-                for element in elements[:self.config.get('max_products_per_page')]:
-                    product = self._extract_single_product(element, base_url)
-                    if product and product.get('name'):
-                        products.append(product)
-                break
-        
-        return products
-    
-    def _extract_single_product(self, element, base_url: str) -> Dict[str, Any]:
-        """Extract data from a single product element."""
-        product = {
-            'scraped_at': time.time(),
-            'source_url': base_url
-        }
-        
-        # Extract name
-        name_selectors = ['h2', 'h3', '.product-title', '.title', 'a[title]']
-        for selector in name_selectors:
-            name_elem = element.select_one(selector)
-            if name_elem:
-                name = name_elem.get_text(strip=True) or name_elem.get('title', '').strip()
-                if name and len(name) > 5:
-                    product['name'] = clean_product_name(name)
-                    break
-        
-        # Extract price
-        price_selectors = ['.price', '.amount', '[class*="price"]', '.cost']
-        for selector in price_selectors:
-            price_elem = element.select_one(selector)
-            if price_elem:
-                price_text = price_elem.get_text(strip=True)
-                price_info = extract_price_from_text(price_text)
-                if price_info:
-                    product.update(price_info)
-                    break
-        
-        # Extract SKU/ID
-        sku_selectors = ['[data-product-id]', '.sku', '[data-sku]']
-        for selector in sku_selectors:
-            sku_elem = element.select_one(selector)
-            if sku_elem:
-                sku = (sku_elem.get_text(strip=True) or 
-                       sku_elem.get('data-product-id', '') or 
-                       sku_elem.get('data-sku', ''))
-                if sku:
-                    product['sku'] = sku
-                    break
-        
-        # Extract product URL
-        link_elem = element.select_one('a[href]')
-        if link_elem:
-            href = link_elem.get('href')
-            if href:
-                product['product_url'] = urljoin(base_url, href)
-        
-        return product
     
     def construct_page_urls(self, base_url: str, max_pages: int) -> List[str]:
-        """Construct URLs for multiple pages."""
+        """Construct URLs for multiple pages with auto-detection."""
         urls = [base_url]
         
+        # For Polish Venture full catalog (auto-detect up to max_pages)
         for page in range(2, max_pages + 1):
-            page_url = f"{base_url}?page={page}" if '?' not in base_url else f"{base_url}&page={page}"
+            if '?' in base_url:
+                page_url = f"{base_url}&page={page}"
+            else:
+                page_url = f"{base_url}?page={page}"
             urls.append(page_url)
         
         return urls
+    
+    async def scrape_full_catalog(self, base_url: str) -> List[Dict[str, Any]]:
+        """Scrape entire catalog with automatic pagination."""
+        self.logger.info(f"Starting FULL CATALOG scrape of {base_url}")
+        
+        if not self.session:
+            await self.create_session()
+        
+        all_products = []
+        page = 1
+        consecutive_empty_pages = 0
+        max_empty_pages = 3  # Stop after 3 empty pages
+        
+        while consecutive_empty_pages < max_empty_pages and page <= 999:
+            page_url = f"{base_url}?page={page}" if page > 1 else base_url
+            
+            self.logger.info(f"Scraping page {page}: {page_url}")
+            
+            # Create semaphore for this page
+            semaphore = asyncio.Semaphore(1)  # One page at a time for full catalog
+            html = await self.fetch_page(page_url, semaphore)
+            
+            if html:
+                products = self.extract_product_data(html, page_url)
+                
+                if products:
+                    all_products.extend(products)
+                    consecutive_empty_pages = 0
+                    self.logger.info(f"Page {page}: Found {len(products)} products (Total: {len(all_products)})")
+                else:
+                    consecutive_empty_pages += 1
+                    self.logger.warning(f"Page {page}: No products found (Empty pages: {consecutive_empty_pages})")
+            else:
+                consecutive_empty_pages += 1
+                self.logger.error(f"Page {page}: Failed to fetch")
+            
+            page += 1
+            
+            # Progress report every 10 pages
+            if page % 10 == 0:
+                self.logger.info(f"Progress: Page {page}, Total products: {len(all_products)}")
+        
+        # Remove duplicates
+        unique_products = self._deduplicate_products(all_products)
+        
+        self.logger.info(f"Full catalog scrape complete: {len(unique_products)} unique products from {page-1} pages")
+        return unique_products
     
     async def scrape_website_async(self, base_url: str) -> List[Dict[str, Any]]:
         """
@@ -505,8 +455,7 @@ class FastExcelScraper:
         """
         if not filename:
             prefix = self.config.get('file_prefix')
-            timestamp_format = self.config.get('timestamp_format')
-            filename = generate_filename(prefix, 'xlsx', timestamp_format)
+            filename = generate_filename(prefix)
         
         if not output_dir:
             output_dir = self.config.get('output_dir')
