@@ -1,13 +1,17 @@
 {
-  "target_urls": [],
+  "target_urls": [
+    "https://autoparts.beforward.jp/search/Lightings/Headlights/",
+    "https://www.upgarage.com/"
+  ],
   "scraper_settings": {
-    "request_delay": 2,
+    "request_delay": 3,
     "timeout": 30,
-    "max_parts_per_site": 50
+    "max_parts_per_site": 100,
+    "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
   },
-  "currency_settings": {
-    "fallback_exchange_rate": 0.0067
-  },
+  "max_pages_per_site": 3,
+  "max_products_per_page": 10,
+  "detailed_scraping": true,
   "pdf_settings": {
     "include_images": true,
     "parts_per_page": 3

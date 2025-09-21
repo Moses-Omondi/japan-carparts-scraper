@@ -89,7 +89,7 @@ class PDFGenerator:
         info_data = [
             ["Total Parts Listed:", str(total_parts)],
             ["Report Generated:", generation_date],
-            ["Currency:", "JPY and USD"],
+            ["Currency:", "Original (KES, USD, JPY)"],
             ["Data Source:", "Various Japanese OEM Parts Websites"]
         ]
         
@@ -128,25 +128,29 @@ class PDFGenerator:
         if part_data.get('part_number'):
             details.append(["Part Number:", part_data['part_number']])
         
-        # Prices
-        jpy_price = part_data.get('price_jpy')
-        usd_price = part_data.get('price_usd')
+        # Price in original currency only
+        price_jpy = part_data.get('price_jpy')
+        price_usd = part_data.get('price_usd')
+        price_kes = part_data.get('price_kes')
         
-        if jpy_price:
-            price_text = f"¥{jpy_price:,.2f}"
-            if usd_price:
-                price_text += f" (${usd_price:.2f} USD)"
+        price_text = None
+        if price_kes:
+            price_text = f"KES {price_kes:,.0f}"
+        elif price_usd:
+            price_text = f"${price_usd:.2f} USD"
+        elif price_jpy:
+            price_text = f"¥{price_jpy:,.0f} JPY"
+        
+        if price_text:
             details.append(["Price:", price_text])
         
-        # Exchange rate info
-        if part_data.get('exchange_rate'):
-            rate_info = f"1 JPY = ${part_data['exchange_rate']:.4f} USD"
-            rate_source = part_data.get('rate_source', 'unknown')
-            details.append(["Exchange Rate:", f"{rate_info} ({rate_source})"])
         
-        # Source URL
+        # Source URL with hyperlink
         if part_data.get('source_url'):
-            details.append(["Source:", part_data['source_url']])
+            source_url = part_data['source_url']
+            # Create clickable hyperlink
+            link_text = f'<link href="{source_url}" color="blue">{source_url}</link>'
+            details.append(["Source:", Paragraph(link_text, self.styles['Normal'])])
         
         # Create table
         if details:
@@ -305,22 +309,36 @@ class PDFGenerator:
         story.append(Paragraph("Japanese OEM Car Parts - Compact Report", self.styles['CustomTitle']))
         story.append(Spacer(1, 0.3*inch))
         
-        # Create table data
-        table_data = [["#", "Part Name", "Part Number", "Price (JPY)", "Price (USD)", "Source"]]
+        # Create table data with original currencies only
+        table_data = [["#", "Part Name", "Part Number", "Price", "Currency", "Source"]]
         
         for i, part in enumerate(parts_data, 1):
+            # Determine price and currency
+            price_text = 'N/A'
+            currency = 'N/A'
+            
+            if part.get('price_kes'):
+                price_text = f"KES {part.get('price_kes'):,.0f}"
+                currency = 'KES'
+            elif part.get('price_usd'):
+                price_text = f"${part.get('price_usd'):.2f}"
+                currency = 'USD'
+            elif part.get('price_jpy'):
+                price_text = f"¥{part.get('price_jpy'):,.0f}"
+                currency = 'JPY'
+            
             row = [
                 str(i),
-                part.get('name', 'N/A')[:30] + ('...' if len(part.get('name', '')) > 30 else ''),  # Truncate long names
-                part.get('part_number', 'N/A'),
-                f"¥{part.get('price_jpy', 0):,.0f}" if part.get('price_jpy') else 'N/A',
-                f"${part.get('price_usd', 0):.2f}" if part.get('price_usd') else 'N/A',
-                part.get('source_url', 'N/A')[:20] + '...' if part.get('source_url') else 'N/A'
+                part.get('name', 'N/A')[:30] + ('...' if len(part.get('name', '')) > 30 else ''),
+                part.get('part_number', part.get('sku', 'N/A')),
+                price_text,
+                currency,
+                Paragraph(f'<link href="{part.get("source_url", "#")}" color="blue">{part.get("source_url", "N/A")[:20] + "..." if part.get("source_url") else "N/A"}</link>', self.styles['Normal']) if part.get('source_url') else 'N/A'
             ]
             table_data.append(row)
         
-        # Create table
-        table = Table(table_data, colWidths=[0.3*inch, 2.2*inch, 1*inch, 0.8*inch, 0.8*inch, 1.2*inch])
+        # Create table with adjusted column widths for original currencies only
+        table = Table(table_data, colWidths=[0.3*inch, 2.2*inch, 1*inch, 1.2*inch, 0.6*inch, 1.2*inch])
         table.setStyle(TableStyle([
             ('BACKGROUND', (0, 0), (-1, 0), colors.grey),
             ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
@@ -369,22 +387,88 @@ class PDFGenerator:
         # Convert to DataFrame and export
         df = pd.DataFrame(parts_data)
         
-        # Select relevant columns and clean up
-        columns_to_export = ['name', 'part_number', 'price_jpy', 'price_usd', 'exchange_rate', 
-                           'description', 'source_url', 'scraped_at', 'conversion_date']
+        # Get all available columns from the data
+        all_columns = set()
+        for part in parts_data:
+            all_columns.update(part.keys())
         
-        # Only include columns that exist in the data
-        available_columns = [col for col in columns_to_export if col in df.columns]
+        # Define priority columns (will appear first) - no converted currencies
+        priority_columns = [
+            'name', 'sku', 'brand', 'model', 'category', 'stock_status',
+            'price_jpy', 'price_usd', 'price_kes', 'original_currency',
+            'description', 'primary_image', 'images', 'source_url',
+            'page_title', 'has_warranty', 'has_shipping_info',
+            'scraped_at'
+        ]
         
-        if available_columns:
-            export_df = df[available_columns]
+        # Add specification columns
+        spec_columns = [col for col in all_columns if col.startswith('spec_') or col.startswith('info_')]
+        spec_columns.sort()
+        
+        # Combine all columns in logical order
+        columns_to_export = []
+        
+        # Add priority columns that exist in data
+        for col in priority_columns:
+            if col in all_columns:
+                columns_to_export.append(col)
+        
+        # Add specification columns
+        columns_to_export.extend(spec_columns)
+        
+        # Add any remaining columns not already included
+        remaining_columns = [col for col in all_columns if col not in columns_to_export]
+        remaining_columns.sort()
+        columns_to_export.extend(remaining_columns)
+        
+        if columns_to_export:
+            # Create export dataframe with available columns
+            export_df = df[columns_to_export].copy()
+            
+            # Handle complex data types (lists, dicts)
+            for col in export_df.columns:
+                export_df[col] = export_df[col].apply(self._format_csv_value)
+            
+            # Save with proper formatting
             export_df.to_csv(output_path, index=False, encoding='utf-8')
+            
+            # Log column information
             self.logger.info(f"CSV export generated: {output_path}")
+            self.logger.info(f"Exported {len(export_df)} rows with {len(columns_to_export)} columns")
+            self.logger.info(f"Columns: {', '.join(columns_to_export[:10])}{'...' if len(columns_to_export) > 10 else ''}")
         else:
             self.logger.warning("No suitable columns found for CSV export")
             return None
         
         return output_path
+    
+    def _format_csv_value(self, value):
+        """
+        Format values for CSV export, handling complex data types.
+        
+        Args:
+            value: Value to format
+            
+        Returns:
+            Formatted string value
+        """
+        if value is None:
+            return ''
+        elif isinstance(value, list):
+            # Join list items with semicolon separator
+            return '; '.join(str(item) for item in value if item)
+        elif isinstance(value, dict):
+            # Convert dict to key=value pairs
+            return '; '.join(f"{k}={v}" for k, v in value.items() if v is not None)
+        elif isinstance(value, (int, float)):
+            # Keep numbers as they are
+            return value
+        else:
+            # Convert to string and clean up
+            str_value = str(value).strip()
+            # Remove newlines and excessive whitespace
+            str_value = ' '.join(str_value.split())
+            return str_value
 
 
 def generate_sample_report():

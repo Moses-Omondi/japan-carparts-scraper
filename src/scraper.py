@@ -102,7 +102,7 @@ class CarPartsScraper:
     
     def scrape_website(self, url: str) -> List[Dict[str, Any]]:
         """
-        Scrape a single website for car parts data.
+        Scrape a single website for car parts data with pagination support.
         
         Args:
             url: The URL to scrape
@@ -110,36 +110,93 @@ class CarPartsScraper:
         Returns:
             List of dictionaries containing part data
         """
+        all_parts = []
+        page_num = 1
+        max_pages = self.config.get('max_pages_per_site', 10)  # Configurable max pages
+        
         try:
-            self.logger.info(f"Scraping: {url}")
-            response = self.session.get(url, timeout=30)
-            response.raise_for_status()
+            self.logger.info(f"Starting to scrape: {url}")
             
-            soup = BeautifulSoup(response.content, 'html.parser')
-            parts_data = self.extract_parts_data(soup, url)
+            while page_num <= max_pages:
+                # Construct page URL
+                if page_num == 1:
+                    current_url = url
+                else:
+                    current_url = self._construct_page_url(url, page_num)
+                
+                self.logger.info(f"Scraping page {page_num}: {current_url}")
+                
+                try:
+                    response = self.session.get(current_url, timeout=30)
+                    response.raise_for_status()
+                    
+                    soup = BeautifulSoup(response.content, 'html.parser')
+                    parts_data = self.extract_parts_data(soup, current_url)
+                    
+                    if not parts_data:
+                        self.logger.info(f"No parts found on page {page_num}, stopping pagination")
+                        break
+                    
+                    all_parts.extend(parts_data)
+                    self.logger.info(f"Found {len(parts_data)} parts on page {page_num}")
+                    
+                    # Check if there are more pages
+                    if not self._has_next_page(soup):
+                        self.logger.info(f"No more pages found after page {page_num}")
+                        break
+                    
+                    page_num += 1
+                    
+                    # Add delay between page requests to be respectful
+                    time.sleep(self.config.get('request_delay', 2))
+                    
+                except requests.exceptions.RequestException as e:
+                    self.logger.error(f"Error scraping page {page_num} of {url}: {e}")
+                    break
             
-            self.logger.info(f"Found {len(parts_data)} parts on {url}")
-            return parts_data
+            self.logger.info(f"Total found {len(all_parts)} parts from {url}")
+            return all_parts
             
-        except requests.exceptions.RequestException as e:
-            self.logger.error(f"Error scraping {url}: {e}")
+        except Exception as e:
+            self.logger.error(f"Error during website scraping {url}: {e}")
             return []
     
     def extract_parts_data(self, soup: BeautifulSoup, base_url: str) -> List[Dict[str, Any]]:
         """
         Extract car parts data from BeautifulSoup object.
-        Enhanced to handle table-based layouts like BE FORWARD.
+        Enhanced to follow product links for detailed information.
         
         Args:
             soup: BeautifulSoup object of the webpage
             base_url: Base URL for resolving relative links
             
         Returns:
-            List of dictionaries containing part data
+            List of dictionaries containing detailed part data
         """
         parts_data = []
         
-        # First, try to extract from table rows (BE FORWARD style)
+        # First, try to find and follow product links for detailed information
+        product_links = self.extract_product_links(soup, base_url)
+        
+        if product_links:
+            self.logger.info(f"Found {len(product_links)} product links, scraping detailed information...")
+            
+            max_products = self.config.get('max_products_per_page', 10)  # Limit to avoid overwhelming
+            for i, product_url in enumerate(product_links[:max_products]):
+                self.logger.info(f"Scraping product {i+1}/{min(len(product_links), max_products)}: {product_url}")
+                
+                product_details = self.scrape_product_details(product_url)
+                if product_details and product_details.get('name'):
+                    parts_data.append(product_details)
+                
+                # Add delay to be respectful
+                time.sleep(self.config.get('request_delay', 2))
+            
+            if parts_data:
+                self.logger.info(f"Successfully extracted detailed data for {len(parts_data)} products")
+                return parts_data
+        
+        # Fallback: try to extract from table rows (BE FORWARD style)
         table_parts = self.extract_from_table_rows(soup, base_url)
         if table_parts:
             parts_data.extend(table_parts)
@@ -471,5 +528,852 @@ class CarPartsScraper:
             DataFrame containing parts data
         """
         return pd.DataFrame(self.scraped_data)
+    
+    def _construct_page_url(self, base_url: str, page_num: int) -> str:
+        """
+        Construct URL for specific page number.
+        Handles various pagination patterns common in Japanese websites.
+        
+        Args:
+            base_url: Base URL of the website
+            page_num: Page number to construct URL for
+            
+        Returns:
+            URL for the specific page
+        """
+        from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
+        
+        parsed = urlparse(base_url)
+        query_params = parse_qs(parsed.query)
+        
+        # Common pagination parameter names
+        page_params = ['page', 'p', 'offset', 'start', 'pager']
+        
+        # Try to find existing pagination parameter
+        for param in page_params:
+            if param in query_params:
+                query_params[param] = [str(page_num)]
+                break
+        else:
+            # Default to 'page' parameter
+            query_params['page'] = [str(page_num)]
+        
+        # Reconstruct URL
+        new_query = urlencode(query_params, doseq=True)
+        new_parsed = parsed._replace(query=new_query)
+        
+        return urlunparse(new_parsed)
+    
+    def _has_next_page(self, soup: BeautifulSoup) -> bool:
+        """
+        Check if there are more pages to scrape.
+        Looks for common pagination indicators.
+        
+        Args:
+            soup: BeautifulSoup object of current page
+            
+        Returns:
+            True if more pages exist, False otherwise
+        """
+        # Common "next" button selectors
+        next_selectors = [
+            'a[rel="next"]', '.next', '.pagination-next', '.pager-next',
+            'a:contains("次へ")', 'a:contains("Next")', 'a:contains(">")',
+            '.page-next', '.btn-next', '[data-page-next]'
+        ]
+        
+        for selector in next_selectors:
+            if soup.select(selector):
+                return True
+        
+        # Look for numerical pagination with higher page numbers
+        page_links = soup.find_all('a', href=True)
+        for link in page_links:
+            href = link.get('href', '')
+            text = link.get_text(strip=True)
+            
+            # Check if link contains page numbers
+            if any(param in href.lower() for param in ['page=', 'p=']) and text.isdigit():
+                return True
+        
+        return False
+    
+    def extract_product_links(self, soup: BeautifulSoup, base_url: str) -> List[str]:
+        """
+        Extract product links from a listing page.
+        
+        Args:
+            soup: BeautifulSoup object of the listing page
+            base_url: Base URL for resolving relative links
+            
+        Returns:
+            List of absolute product URLs
+        """
+        product_links = set()
+        
+        # Common selectors for product links
+        link_selectors = [
+            'a[href*="/product/"]',
+            'a[href*="/item/"]', 
+            'a[href*="/parts/"]',
+            '.product-link',
+            '.product a',
+            '.item a',
+            '.product-item a',
+            'h3 a',
+            'h2 a',
+            '.title a',
+            '.name a'
+        ]
+        
+        for selector in link_selectors:
+            links = soup.select(selector)
+            for link in links:
+                href = link.get('href')
+                if href:
+                    # Convert relative URLs to absolute
+                    absolute_url = urljoin(base_url, href)
+                    # Filter for actual product pages
+                    if self._is_product_url(absolute_url):
+                        product_links.add(absolute_url)
+        
+        return list(product_links)
+    
+    def _is_product_url(self, url: str) -> bool:
+        """
+        Check if URL appears to be a product page.
+        
+        Args:
+            url: URL to check
+            
+        Returns:
+            True if URL appears to be a product page
+        """
+        url_lower = url.lower()
+        
+        # Must contain product indicators
+        product_indicators = [
+            '/product/', '/item/', '/parts/', '/detail/', '/view/',
+            'product-', 'item-', 'part-'
+        ]
+        
+        has_product_indicator = any(indicator in url_lower for indicator in product_indicators)
+        if not has_product_indicator:
+            return False
+        
+        # Exclude non-product URLs
+        exclusions = [
+            '#',  # Page fragments/anchors
+            'add-to-cart',  # Add to cart links
+            'product-category',  # Category pages
+            'product-tag',  # Tag pages
+            'filter',  # Filter pages
+            'search',  # Search results
+            'cart',  # Cart pages
+            'checkout',  # Checkout pages
+            'account',  # Account pages
+            '?add-to-cart',  # Add to cart query params
+            '?filter',  # Filter query params
+            'page=',  # Pagination
+            'orderby=',  # Sorting
+            'min_price=',  # Price filtering
+            'max_price=',  # Price filtering
+            '/category/',  # Category browsing
+            '/tag/',  # Tag browsing
+            '/brand/',  # Brand browsing
+            'filter-products',  # Filter products text/action
+            '/wp-admin',  # WordPress admin
+            '/wp-content',  # WordPress content
+            'javascript:',  # JavaScript links
+            'mailto:',  # Email links
+            'tel:',  # Phone links
+        ]
+        
+        # Check if URL contains any exclusions
+        for exclusion in exclusions:
+            if exclusion in url_lower:
+                return False
+                
+        # Additional check: URLs that are too short are likely not product pages
+        if len(url) < 20:
+            return False
+            
+        # URLs ending with common non-product extensions
+        if url_lower.endswith(('.jpg', '.jpeg', '.png', '.gif', '.pdf', '.zip', '.css', '.js')):
+            return False
+        
+        return True
+    
+    def scrape_product_details(self, product_url: str) -> Dict[str, Any]:
+        """
+        Scrape detailed information from a single product page.
+        
+        Args:
+            product_url: URL of the product page
+            
+        Returns:
+            Dictionary containing detailed product information
+        """
+        try:
+            self.logger.info(f"Scraping product details: {product_url}")
+            response = self.session.get(product_url, timeout=30)
+            response.raise_for_status()
+            
+            soup = BeautifulSoup(response.content, 'html.parser')
+            
+            # Use site-specific extraction for Polish Venture
+            if 'polishventure.com' in product_url.lower():
+                self.logger.info(f"Using Polish Venture specific extraction for {product_url}")
+                product_data = self._extract_polish_venture_data(soup, product_url)
+            else:
+                # Extract detailed product information using generic methods
+                product_data = {
+                    'source_url': product_url,
+                    'scraped_at': time.time()
+                }
+                
+                # Extract product name
+                product_data['name'] = self._extract_product_name(soup)
+                
+                # Extract prices in various currencies
+                product_data.update(self._extract_pricing_info(soup))
+                
+                # Extract product specifications
+                product_data.update(self._extract_specifications(soup))
+                
+                # Extract images
+                product_data['images'] = self._extract_images(soup, product_url)
+                product_data['primary_image'] = product_data['images'][0] if product_data['images'] else None
+                
+                # Extract description
+                product_data['description'] = self._extract_description(soup)
+                
+                # Extract additional details
+                product_data.update(self._extract_additional_details(soup))
+            
+            return product_data
+            
+        except Exception as e:
+            self.logger.error(f"Error scraping product details from {product_url}: {e}")
+            return {'source_url': product_url, 'error': str(e), 'scraped_at': time.time()}
+    
+    def _extract_product_name(self, soup: BeautifulSoup) -> Optional[str]:
+        """
+        Extract product name from various possible locations.
+        
+        Args:
+            soup: BeautifulSoup object of product page
+            
+        Returns:
+            Product name or None
+        """
+        name_selectors = [
+            'h1.product-title',
+            'h1.entry-title', 
+            'h1.product_title',
+            'h1',
+            '.product-name',
+            '.product-title',
+            '.item-name',
+            '.title',
+            '[data-product-title]'
+        ]
+        
+        for selector in name_selectors:
+            element = soup.select_one(selector)
+            if element:
+                name = element.get_text(strip=True)
+                if name and len(name) > 3:  # Ensure it's a meaningful name
+                    return name
+        
+        return None
+    
+    def _extract_pricing_info(self, soup: BeautifulSoup) -> Dict[str, Any]:
+        """
+        Extract pricing information in various currencies.
+        
+        Args:
+            soup: BeautifulSoup object of product page
+            
+        Returns:
+            Dictionary with pricing information
+        """
+        pricing_info = {}
+        
+        # Price selectors for different websites
+        price_selectors = [
+            '.price', '.amount', '.cost', '.price-current',
+            '.product-price', '.item-price', '.sale-price',
+            '[data-price]', '.woocommerce-Price-amount',
+            '.price-box', '.regular-price', '.special-price'
+        ]
+        
+        for selector in price_selectors:
+            elements = soup.select(selector)
+            for element in elements:
+                price_text = element.get_text(strip=True)
+                
+                # Extract different currencies
+                if 'KSh' in price_text or 'KES' in price_text:
+                    price = self._extract_numeric_price(price_text)
+                    if price:
+                        pricing_info['price_kes'] = price
+                        pricing_info['original_currency'] = 'KES'
+                
+                elif '$' in price_text and 'USD' in price_text.upper():
+                    price = self._extract_numeric_price(price_text)
+                    if price:
+                        pricing_info['price_usd'] = price
+                        pricing_info['original_currency'] = 'USD'
+                
+                elif '¥' in price_text or 'JPY' in price_text.upper():
+                    price = self._extract_numeric_price(price_text)
+                    if price:
+                        pricing_info['price_jpy'] = price
+                        pricing_info['original_currency'] = 'JPY'
+        
+        return pricing_info
+    
+    def _extract_numeric_price(self, price_text: str) -> Optional[float]:
+        """
+        Extract numeric price from text with improved parsing.
+        
+        Args:
+            price_text: Text containing price
+            
+        Returns:
+            Numeric price or None
+        """
+        import re
+        
+        if not price_text:
+            return None
+            
+        # Handle different price formats
+        # KSh 17,120.00 -> 17120.00
+        # $1,234.56 -> 1234.56  
+        # ¥12,345 -> 12345
+        
+        # First try to find numbers with commas and decimal points
+        number_patterns = [
+            r'([\d,]+\.\d+)',  # 17,120.00
+            r'([\d,]+)',       # 17,120
+            r'(\d+\.\d+)',     # 120.00
+            r'(\d+)'           # 120
+        ]
+        
+        for pattern in number_patterns:
+            matches = re.findall(pattern, price_text)
+            if matches:
+                # Take the largest number (likely the main price)
+                numbers = []
+                for match in matches:
+                    try:
+                        # Remove commas and convert to float
+                        num_str = match.replace(',', '')
+                        num_val = float(num_str)
+                        if num_val > 0:  # Only positive prices
+                            numbers.append(num_val)
+                    except ValueError:
+                        continue
+                
+                if numbers:
+                    return max(numbers)  # Return the largest number found
+        
+        return None
+    
+    def _extract_specifications(self, soup: BeautifulSoup) -> Dict[str, Any]:
+        """
+        Extract product specifications and technical details.
+        
+        Args:
+            soup: BeautifulSoup object of product page
+            
+        Returns:
+            Dictionary with specifications
+        """
+        specs = {}
+        
+        # Look for specification tables
+        spec_tables = soup.find_all('table')
+        for table in spec_tables:
+            rows = table.find_all('tr')
+            for row in rows:
+                cells = row.find_all(['td', 'th'])
+                if len(cells) >= 2:
+                    key = cells[0].get_text(strip=True)
+                    value = cells[1].get_text(strip=True)
+                    if key and value:
+                        # Clean up key name
+                        key = key.replace(':', '').replace('.', '').strip()
+                        specs[f'spec_{key.lower().replace(" ", "_")}'] = value
+        
+        # Look for additional information sections
+        info_sections = soup.find_all(['div', 'section'], class_=lambda x: x and 'info' in x.lower())
+        for section in info_sections:
+            # Extract key-value pairs from text
+            text = section.get_text()
+            lines = text.split('\n')
+            for line in lines:
+                if ':' in line:
+                    parts = line.split(':', 1)
+                    if len(parts) == 2:
+                        key = parts[0].strip()
+                        value = parts[1].strip()
+                        if key and value and len(key) < 50:
+                            specs[f'info_{key.lower().replace(" ", "_")}'] = value
+        
+        # Look for SKU, brand, model, etc.
+        meta_selectors = {
+            'sku': ['.sku', '[data-sku]', '.product-sku'],
+            'brand': ['.brand', '[data-brand]', '.product-brand'],
+            'model': ['.model', '[data-model]', '.product-model'],
+            'category': ['.category', '.product-category'],
+            'stock_status': ['.stock', '.availability', '.in-stock', '.out-of-stock']
+        }
+        
+        for key, selectors in meta_selectors.items():
+            for selector in selectors:
+                element = soup.select_one(selector)
+                if element:
+                    value = element.get_text(strip=True)
+                    if value:
+                        # Clean up common prefixes
+                        cleaned_value = value
+                        for prefix in ['SKU:', 'Brand:', 'Model:', 'Category:', 'Stock:']:
+                            if cleaned_value.startswith(prefix):
+                                cleaned_value = cleaned_value[len(prefix):].strip()
+                                break
+                        specs[key] = cleaned_value
+                        break
+        
+        return specs
+    
+    def _extract_images(self, soup: BeautifulSoup, base_url: str) -> List[str]:
+        """
+        Extract product images.
+        
+        Args:
+            soup: BeautifulSoup object of product page
+            base_url: Base URL for resolving relative links
+            
+        Returns:
+            List of absolute image URLs
+        """
+        images = []
+        
+        # Image selectors
+        img_selectors = [
+            '.product-image img',
+            '.product-gallery img', 
+            '.item-image img',
+            '.main-image img',
+            '.featured-image img',
+            'img[alt*="product"]',
+            'img[src*="product"]'
+        ]
+        
+        for selector in img_selectors:
+            img_elements = soup.select(selector)
+            for img in img_elements:
+                src = img.get('src') or img.get('data-src') or img.get('data-lazy')
+                if src:
+                    absolute_url = urljoin(base_url, src)
+                    if self._is_valid_image_url(absolute_url):
+                        images.append(absolute_url)
+        
+        # Remove duplicates while preserving order
+        seen = set()
+        unique_images = []
+        for img in images:
+            if img not in seen:
+                seen.add(img)
+                unique_images.append(img)
+        
+        return unique_images[:5]  # Limit to 5 images
+    
+    def _is_valid_image_url(self, url: str) -> bool:
+        """
+        Check if URL appears to be a valid image.
+        
+        Args:
+            url: URL to check
+            
+        Returns:
+            True if URL appears to be an image
+        """
+        image_extensions = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp']
+        url_lower = url.lower()
+        return any(ext in url_lower for ext in image_extensions) and 'placeholder' not in url_lower
+    
+    def _extract_description(self, soup: BeautifulSoup) -> Optional[str]:
+        """
+        Extract product description.
+        
+        Args:
+            soup: BeautifulSoup object of product page
+            
+        Returns:
+            Product description or None
+        """
+        desc_selectors = [
+            '.product-description',
+            '.description',
+            '.product-content',
+            '.product-details',
+            '.product-info',
+            '[data-description]'
+        ]
+        
+        for selector in desc_selectors:
+            element = soup.select_one(selector)
+            if element:
+                desc = element.get_text(strip=True)
+                if desc and len(desc) > 20:  # Ensure meaningful description
+                    return desc[:500]  # Limit length
+        
+        return None
+    
+    def _extract_additional_details(self, soup: BeautifulSoup) -> Dict[str, Any]:
+        """
+        Extract any additional product details.
+        
+        Args:
+            soup: BeautifulSoup object of product page
+            
+        Returns:
+            Dictionary with additional details
+        """
+        details = {}
+        
+        # Extract meta information
+        page_title = soup.find('title')
+        if page_title:
+            details['page_title'] = page_title.get_text(strip=True)
+        
+        # Extract any warranty information
+        warranty_text = soup.get_text().lower()
+        if 'warranty' in warranty_text or 'guarantee' in warranty_text:
+            details['has_warranty'] = True
+        
+        # Extract shipping information
+        if 'shipping' in warranty_text or 'delivery' in warranty_text:
+            details['has_shipping_info'] = True
+        
+        return details
+    
+    def _extract_polish_venture_data(self, soup: BeautifulSoup, product_url: str) -> Dict[str, Any]:
+        """
+        Extract data specifically from Polish Venture website structure.
+        
+        Args:
+            soup: BeautifulSoup object of the product page
+            product_url: URL of the product page
+            
+        Returns:
+            Dictionary with extracted product data
+        """
+        product_data = {
+            'source_url': product_url,
+            'scraped_at': time.time()
+        }
+        
+        # Extract product name - Polish Venture uses h1.entry-title or h1.product_title
+        name_selectors = [
+            'h1.entry-title',
+            'h1.product_title', 
+            'h1.product-title',
+            '.product_title',
+            '.entry-title',
+            'h1'
+        ]
+        
+        for selector in name_selectors:
+            element = soup.select_one(selector)
+            if element:
+                name = element.get_text(strip=True)
+                if name and len(name) > 3:
+                    product_data['name'] = name
+                    break
+        
+        # Extract price - Polish Venture specific extraction
+        # Strategy: 1) Try structured data first, 2) Target main product area, 3) Fallback to broader search
+        
+        import re
+        all_prices = []
+        
+        # Method 1: Extract from structured data (JSON-LD) - most reliable
+        json_scripts = soup.find_all('script', type='application/ld+json')
+        for script in json_scripts:
+            try:
+                import json
+                data = json.loads(script.string)
+                if isinstance(data, dict) and '@graph' in data:
+                    for item in data['@graph']:
+                        if item.get('@type') == 'Product' and 'offers' in item:
+                            for offer in item['offers']:
+                                if 'priceSpecification' in offer:
+                                    for price_spec in offer['priceSpecification']:
+                                        price_str = price_spec.get('price')
+                                        if price_str:
+                                            try:
+                                                price_value = float(price_str)
+                                                if price_value > 0:
+                                                    all_prices.append(price_value)
+                                                    self.logger.info(f"Found price from structured data: {price_value}")
+                                                    break
+                                            except ValueError:
+                                                continue
+            except (json.JSONDecodeError, KeyError, TypeError):
+                continue
+        
+        # Method 2: Extract from main product display area (avoid related products)
+        if not all_prices:
+            # Look for price in the main product area only
+            main_product_areas = [
+                '.single-product-wrapper',
+                '.product-detail', 
+                '.entry-summary',
+                '.summary',
+                '.single-product'
+            ]
+            
+            main_area = None
+            for area_selector in main_product_areas:
+                main_area = soup.select_one(area_selector)
+                if main_area:
+                    break
+            
+            if main_area:
+                # Look for prices only within the main product area
+                price_selectors = [
+                    '.woocommerce-Price-amount bdi',
+                    '.woocommerce-Price-amount',
+                    '.price .amount',
+                    '.price bdi',
+                    '.price'
+                ]
+                
+                for selector in price_selectors:
+                    elements = main_area.select(selector)
+                    for element in elements:
+                        # Skip if element is part of related products or sidebars
+                        element_text = element.get_text(strip=True)
+                        if 'KSh' in element_text or 'KES' in element_text:
+                            # Clean and extract price
+                            cleaned_text = element_text.replace('KSh', '').replace('KES', '').replace(',', '').strip()
+                            numbers = re.findall(r'\d+(?:\.\d+)?', cleaned_text)
+                            if numbers:
+                                try:
+                                    price_value = float(numbers[0])
+                                    if price_value > 0:
+                                        # Only add if this looks like a main price (not related products)
+                                        parent_context = element.get_text() if element.parent else ''
+                                        if not any(skip in parent_context.lower() for skip in ['related', 'you may also', 'similar']):
+                                            all_prices.append(price_value)
+                                except ValueError:
+                                    continue
+        
+        # Method 3: Fallback - broader search but filter out related products
+        if not all_prices:
+            fallback_selectors = [
+                '.woocommerce-Price-amount bdi',
+                '.woocommerce-Price-amount', 
+                '.price .amount',
+                '.price bdi',
+                '.price'
+            ]
+            
+            for selector in fallback_selectors:
+                elements = soup.select(selector)
+                for element in elements:
+                    # Skip elements that are clearly from related products sections
+                    ancestor_text = ''
+                    current = element
+                    for _ in range(5):  # Check up to 5 levels up
+                        if current and current.parent:
+                            current = current.parent
+                            if current.get('class'):
+                                ancestor_classes = ' '.join(current.get('class', []))
+                                ancestor_text += ancestor_classes.lower() + ' '
+                        else:
+                            break
+                    
+                    # Skip if in related products, cart, or sidebar areas
+                    if any(skip in ancestor_text for skip in ['related', 'upsell', 'cross-sell', 'cart', 'sidebar', 'widget']):
+                        continue
+                        
+                    price_text = element.get_text(strip=True)
+                    if 'KSh' in price_text or 'KES' in price_text:
+                        cleaned_text = price_text.replace('KSh', '').replace('KES', '').replace(',', '').strip()
+                        numbers = re.findall(r'\d+(?:\.\d+)?', cleaned_text)
+                        if numbers:
+                            try:
+                                price_value = float(numbers[0])
+                                if price_value > 0:
+                                    all_prices.append(price_value)
+                            except ValueError:
+                                continue
+        
+        # Select the most appropriate price with improved logic
+        if all_prices:
+            # Remove obvious outliers (prices below 100 KES are likely errors)
+            valid_prices = [p for p in all_prices if p > 100]
+            
+            if valid_prices:
+                # Since we now prioritize structured data and main product area,
+                # the first valid price found is usually the correct one
+                if len(valid_prices) == 1:
+                    selected_price = valid_prices[0]
+                else:
+                    # If multiple prices, prefer the first one found (from structured data or main area)
+                    # But remove extreme outliers
+                    price_range = max(valid_prices) - min(valid_prices)
+                    if price_range > min(valid_prices) * 0.5:  # If range is > 50% of min price
+                        # Remove extreme outliers and take first reasonable price
+                        median_price = sorted(valid_prices)[len(valid_prices) // 2]
+                        filtered_prices = [p for p in valid_prices if abs(p - median_price) < median_price * 0.3]
+                        selected_price = filtered_prices[0] if filtered_prices else valid_prices[0]
+                    else:
+                        # Prices are close, take the first one
+                        selected_price = valid_prices[0]
+                
+                product_data['price_kes'] = selected_price
+                product_data['original_currency'] = 'KES'
+                self.logger.info(f"Selected price: KES {selected_price} from {len(all_prices)} found prices")
+        
+        # Extract SKU - Polish Venture shows SKU in product meta
+        sku_selectors = [
+            '.sku',
+            '.product_meta .sku',
+            '[data-sku]',
+            '.product-sku'
+        ]
+        
+        for selector in sku_selectors:
+            element = soup.select_one(selector)
+            if element:
+                sku = element.get_text(strip=True)
+                if sku and sku != 'N/A':
+                    # Clean up SKU by removing prefixes like "SKU:"
+                    cleaned_sku = sku
+                    for prefix in ['SKU:', 'SKU ', 'Product Code:', 'Code:']:
+                        if cleaned_sku.startswith(prefix):
+                            cleaned_sku = cleaned_sku[len(prefix):].strip()
+                            break
+                    product_data['sku'] = cleaned_sku
+                    break
+        
+        # Extract brand - Look for "Battery Brand" or similar in Polish Venture
+        brand_text = soup.get_text().lower()
+        
+        # Look for "Battery Brand Power zone" pattern
+        import re
+        brand_patterns = [
+            r'battery brand[:\s]+([^\n\r]+)',
+            r'brand[:\s]+([^\n\r]+)',
+            r'manufacturer[:\s]+([^\n\r]+)'
+        ]
+        
+        for pattern in brand_patterns:
+            matches = re.findall(pattern, brand_text, re.IGNORECASE)
+            if matches:
+                brand = matches[0].strip()
+                if len(brand) < 50:  # Reasonable brand name length
+                    product_data['brand'] = brand.title()
+                    break
+        
+        # Extract category from breadcrumbs or page structure
+        category_selectors = [
+            '.breadcrumb a:last-of-type',
+            '.category a',
+            '.product-category',
+            '[rel="tag"]'
+        ]
+        
+        for selector in category_selectors:
+            element = soup.select_one(selector)
+            if element:
+                category = element.get_text(strip=True)
+                if category and category.lower() != 'home':
+                    product_data['category'] = category
+                    break
+        
+        # Default to 'Car Battery' if we found battery-related content
+        if not product_data.get('category') and 'battery' in product_data.get('name', '').lower():
+            product_data['category'] = 'Car Battery'
+        
+        # Extract stock status
+        stock_selectors = [
+            '.stock',
+            '.in-stock',
+            '.availability',
+            '.stock-status'
+        ]
+        
+        stock_text = soup.get_text().lower()
+        if 'in stock' in stock_text:
+            product_data['stock_status'] = 'In Stock'
+        elif 'out of stock' in stock_text:
+            product_data['stock_status'] = 'Out of Stock'
+        
+        # Extract description from Polish Venture structure
+        desc_selectors = [
+            '.woocommerce-product-details__short-description',
+            '.product-description',
+            '.entry-summary p',
+            '.product-short-description',
+            '.description'
+        ]
+        
+        for selector in desc_selectors:
+            element = soup.select_one(selector)
+            if element:
+                desc = element.get_text(strip=True)
+                if desc and len(desc) > 20:
+                    product_data['description'] = desc[:500]
+                    break
+        
+        # Extract additional information from tables
+        tables = soup.find_all('table')
+        for table in tables:
+            rows = table.find_all('tr')
+            for row in rows:
+                cells = row.find_all(['td', 'th'])
+                if len(cells) >= 2:
+                    key = cells[0].get_text(strip=True).lower()
+                    value = cells[1].get_text(strip=True)
+                    
+                    if 'battery brand' in key:
+                        product_data['brand'] = value
+                    elif 'oem' in key or 'part' in key:
+                        product_data['part_number'] = value
+                    elif key in ['sku', 'product code']:
+                        product_data['sku'] = value
+        
+        # Extract images - Polish Venture uses WooCommerce gallery
+        image_selectors = [
+            '.woocommerce-product-gallery__image img',
+            '.product-images img',
+            '.wp-post-image',
+            '.product-gallery img'
+        ]
+        
+        images = []
+        for selector in image_selectors:
+            img_elements = soup.select(selector)
+            for img in img_elements:
+                src = img.get('src') or img.get('data-src') or img.get('data-large_image')
+                if src and self._is_valid_image_url(src):
+                    if not src.startswith('http'):
+                        from urllib.parse import urljoin
+                        src = urljoin(product_url, src)
+                    images.append(src)
+        
+        if images:
+            product_data['images'] = list(dict.fromkeys(images))  # Remove duplicates
+            product_data['primary_image'] = images[0]
+        
+        return product_data
 
 

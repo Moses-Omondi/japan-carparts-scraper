@@ -16,7 +16,6 @@ from typing import List, Dict, Any, Optional
 sys.path.append(os.path.join(os.path.dirname(__file__), 'src'))
 
 from scraper import CarPartsScraper
-from currency_converter import CurrencyConverter
 from pdf_generator import PDFGenerator
 
 
@@ -128,16 +127,19 @@ def scrape_parts_data(config: Dict[str, Any], logger: logging.Logger) -> List[Di
             
             try:
                 parts_data = scraper.scrape_website(url)
-                all_parts_data.extend(parts_data)
-                logger.info(f"Found {len(parts_data)} parts from {url}")
-                
-                # Download images for parts that have image URLs
-                for i, part in enumerate(parts_data):
-                    if part.get('image_url'):
-                        filename = f"part_{len(all_parts_data)}_{i}_{int(time.time())}.jpg"
-                        local_image_path = scraper.download_image(part['image_url'], filename)
-                        if local_image_path:
-                            part['local_image_path'] = local_image_path
+                if parts_data:  # Only add if we found actual data
+                    all_parts_data.extend(parts_data)
+                    logger.info(f"Found {len(parts_data)} parts from {url}")
+                    
+                    # Download images for parts that have image URLs
+                    for i, part in enumerate(parts_data):
+                        if part.get('image_url'):
+                            filename = f"part_{len(all_parts_data)}_{i}_{int(time.time())}.jpg"
+                            local_image_path = scraper.download_image(part['image_url'], filename)
+                            if local_image_path:
+                                part['local_image_path'] = local_image_path
+                else:
+                    logger.warning(f"No parts found from {url}")
                             
             except Exception as site_error:
                 logger.error(f"Error scraping {url}: {site_error}")
@@ -157,12 +159,14 @@ def scrape_parts_data(config: Dict[str, Any], logger: logging.Logger) -> List[Di
             logger.info(f"Successfully scraped {len(all_parts_data)} total parts")
             return all_parts_data
         else:
-            logger.warning("No parts found from any site - this usually means:")
-            logger.warning("1. The website uses JavaScript to load content")
+            logger.warning("No parts found from any site. This could be because:")
+            logger.warning("1. The website uses JavaScript to load content (try using Selenium)")
             logger.warning("2. The website has different HTML selectors than expected")
             logger.warning("3. The website is blocking automated requests")
-            logger.info("Falling back to sample data to demonstrate the scraper functionality")
-            return get_sample_data()
+            logger.warning("4. The website structure has changed")
+            logger.error("CRITICAL: Unable to scrape any real data. Please check website accessibility and structure.")
+            # Only use sample data if explicitly requested
+            return []
         
     except Exception as e:
         logger.error(f"Error during scraping: {e}")
@@ -170,37 +174,6 @@ def scrape_parts_data(config: Dict[str, Any], logger: logging.Logger) -> List[Di
         return get_sample_data()
 
 
-def convert_currencies(parts_data: List[Dict[str, Any]], config: Dict[str, Any], 
-                      logger: logging.Logger) -> List[Dict[str, Any]]:
-    """
-    Convert JPY prices to USD for all parts.
-    
-    Args:
-        parts_data: List of parts data with JPY prices
-        config: Configuration dictionary
-        logger: Logger instance
-        
-    Returns:
-        List of parts data with USD prices added
-    """
-    logger.info("Starting currency conversion...")
-    
-    # Initialize currency converter
-    converter = CurrencyConverter(config)
-    
-    try:
-        # Convert all parts
-        converted_parts = converter.convert_parts_list(parts_data)
-        
-        # Log exchange rate info
-        rate_info = converter.get_rate_info()
-        logger.info(f"Using exchange rate: {rate_info['current_rate']}")
-        
-        return converted_parts
-        
-    except Exception as e:
-        logger.error(f"Error during currency conversion: {e}")
-        return parts_data  # Return original data if conversion fails
 
 
 def generate_reports(parts_data: List[Dict[str, Any]], config: Dict[str, Any], 
@@ -253,40 +226,45 @@ def get_sample_data() -> List[Dict[str, Any]]:
     return [
         {
             'name': 'Toyota Supra A90 Front Bumper (OEM)',
-            'part_number': 'TS-FB-A90-001',
+            'sku': 'TS-FB-A90-001',
             'price_jpy': 89000,
+            'original_currency': 'JPY',
             'description': 'Original front bumper for Toyota Supra A90 (2019-2024)',
             'source_url': 'https://example-toyota-parts.jp/supra-bumper',
             'scraped_at': datetime.now().timestamp()
         },
         {
             'name': 'Nissan R34 GT-R Rear Wing (Nismo)',
-            'part_number': 'N-RW-R34-NIS',
+            'sku': 'N-RW-R34-NIS',
             'price_jpy': 156000,
+            'original_currency': 'JPY',
             'description': 'Nismo rear wing for Nissan Skyline R34 GT-R',
             'source_url': 'https://example-nissan-parts.jp/gtr-wing',
             'scraped_at': datetime.now().timestamp()
         },
         {
             'name': 'Honda NSX NA1 Brake Rotors (Brembo)',
-            'part_number': 'H-BR-NA1-BRE',
+            'sku': 'H-BR-NA1-BRE',
             'price_jpy': 78000,
+            'original_currency': 'JPY',
             'description': 'Brembo brake rotors for Honda NSX NA1 (1990-1997)',
             'source_url': 'https://example-honda-parts.jp/nsx-brakes',
             'scraped_at': datetime.now().timestamp()
         },
         {
             'name': 'Mazda RX-7 FD3S Turbo Upgrade Kit',
-            'part_number': 'M-TU-FD3S-001',
+            'sku': 'M-TU-FD3S-001',
             'price_jpy': 234000,
+            'original_currency': 'JPY',
             'description': 'Complete turbo upgrade kit for Mazda RX-7 FD3S',
             'source_url': 'https://example-mazda-parts.jp/rx7-turbo',
             'scraped_at': datetime.now().timestamp()
         },
         {
             'name': 'Subaru WRX STI EJ25 Engine Block',
-            'part_number': 'S-EB-EJ25-STI',
+            'sku': 'S-EB-EJ25-STI',
             'price_jpy': 445000,
+            'original_currency': 'JPY',
             'description': 'Rebuilt EJ25 engine block for Subaru WRX STI',
             'source_url': 'https://example-subaru-parts.jp/sti-engine',
             'scraped_at': datetime.now().timestamp()
@@ -304,9 +282,10 @@ def print_summary(parts_data: List[Dict[str, Any]], generated_files: Dict[str, s
     print(f"Total parts processed: {len(parts_data)}")
     
     if parts_data:
-        # Price statistics
+        # Price statistics in original currencies
         jpy_prices = [p.get('price_jpy', 0) for p in parts_data if p.get('price_jpy')]
         usd_prices = [p.get('price_usd', 0) for p in parts_data if p.get('price_usd')]
+        kes_prices = [p.get('price_kes', 0) for p in parts_data if p.get('price_kes')]
         
         if jpy_prices:
             print(f"Price range (JPY): ¥{min(jpy_prices):,.0f} - ¥{max(jpy_prices):,.0f}")
@@ -315,6 +294,10 @@ def print_summary(parts_data: List[Dict[str, Any]], generated_files: Dict[str, s
         if usd_prices:
             print(f"Price range (USD): ${min(usd_prices):.2f} - ${max(usd_prices):.2f}")
             print(f"Average price (USD): ${sum(usd_prices)/len(usd_prices):.2f}")
+        
+        if kes_prices:
+            print(f"Price range (KES): KES {min(kes_prices):,.0f} - KES {max(kes_prices):,.0f}")
+            print(f"Average price (KES): KES {sum(kes_prices)/len(kes_prices):,.0f}")
     
     print("\nGenerated files:")
     for format_name, file_path in generated_files.items():
@@ -337,8 +320,6 @@ def main():
                        help='Logging level (default: INFO)')
     parser.add_argument('--sample-only', '-s', action='store_true',
                        help='Skip scraping and use sample data only')
-    parser.add_argument('--no-convert', '-n', action='store_true',
-                       help='Skip currency conversion')
     parser.add_argument('--output-dir', '-o', default='outputs',
                        help='Output directory for generated files')
     
@@ -370,11 +351,8 @@ def main():
             logger.error("No parts data available. Exiting.")
             return 1
         
-        # Step 2: Convert currencies
-        if not args.no_convert:
-            parts_data = convert_currencies(parts_data, config, logger)
-        else:
-            logger.info("Skipping currency conversion (--no-convert flag)")
+        # Step 2: Keep original currencies (no conversion needed)
+        logger.info("Using original currency data without conversion")
         
         # Step 3: Generate reports
         generated_files = generate_reports(parts_data, config, logger)
