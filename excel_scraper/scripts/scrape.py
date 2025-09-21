@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """
-Excel Scraper CLI - Command line interface for the fast Excel scraper.
+Fast Excel Scraper CLI - Optimized for sub-50 second performance.
 
 Usage:
     python -m excel_scraper.scripts.scrape [OPTIONS] URL
 
 Examples:
-    python -m excel_scraper.scripts.scrape https://polishventure.com/shop/
-    python -m excel_scraper.scripts.scrape https://example.com/products --max-products 100
+    python -m excel_scraper.scripts.scrape https://polishventure.com/shop/ --speed-test
+    python -m excel_scraper.scripts.scrape https://polishventure.com/shop/ --max-time 45
 """
 
 import asyncio
@@ -108,6 +108,18 @@ Examples:
     )
     
     parser.add_argument(
+        '--speed-test',
+        action='store_true',
+        help='Speed test mode: optimized settings for fast scraping'
+    )
+    
+    parser.add_argument(
+        '--max-time',
+        type=int,
+        help='Maximum scraping time in seconds (for testing)'
+    )
+    
+    parser.add_argument(
         '--version',
         action='version',
         version='Excel Scraper 1.0.0'
@@ -156,6 +168,20 @@ async def run_scraper(args) -> int:
     config.set('timeout', args.timeout)
     config.set('max_pages', max_pages)
     config.set('output_dir', args.output_dir)
+    
+    # Speed test mode optimizations
+    if args.speed_test:
+        config.set('max_concurrent_requests', 40)
+        config.set('max_concurrent_products', 35)
+        config.set('request_delay', 0.05)
+        config.set('product_request_delay', 0.02)
+        config.set('timeout', 10)
+        config.set('extract_images', False)  # Skip images for speed
+        config.set('extract_descriptions', False)  # Skip descriptions for speed
+        print("🚀 SPEED TEST MODE ENABLED - Ultra-fast settings activated!")
+    
+    if args.max_time:
+        config.set('max_scraping_time', args.max_time)
     
     if args.verbose:
         config.set('log_level', 'DEBUG')

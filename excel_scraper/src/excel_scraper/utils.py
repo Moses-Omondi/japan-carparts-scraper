@@ -5,12 +5,12 @@ from pathlib import Path
 
 
 def setup_logging() -> logging.Logger:
-    """Setup minimal logging."""
+    """Setup logging for performance monitoring."""
     logging.basicConfig(
         level=logging.INFO,
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+        format='%(asctime)s - %(levelname)s - %(message)s'
     )
-    return logging.getLogger("excel_scraper")
+    return logging.getLogger("fast_scraper")
 
 
 def generate_filename(prefix: str = "scraped_products") -> str:

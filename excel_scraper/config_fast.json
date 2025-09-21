@@ -1,0 +1,18 @@
+{
+  "max_concurrent_requests": 40,
+  "max_concurrent_products": 35,
+  "request_delay": 0.05,
+  "product_request_delay": 0.02,
+  "timeout": 10,
+  "max_products_per_page": 50,
+  "max_pages": 20,
+  "connection_limit": 150,
+  "connection_limit_per_host": 40,
+  "keepalive_timeout": 60,
+  "extract_images": false,
+  "extract_descriptions": false,
+  "use_lxml": true,
+  "output_dir": "output",
+  "file_prefix": "fast_scraped_products",
+  "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+}

@@ -1,13 +1,14 @@
 """
-Fast Excel Scraper - High-performance async web scraper for Excel export.
+Fast Excel Scraper - Optimized async web scraper for sub-50 second performance.
 """
 
 import asyncio
-import aiohttp
-import pandas as pd
 import time
 from datetime import datetime
 from typing import List, Dict, Any, Optional
+
+import aiohttp
+import pandas as pd
 from bs4 import BeautifulSoup
 from urllib.parse import urljoin
 
@@ -30,22 +31,30 @@ class FastExcelScraper:
         self.logger = setup_logging()
         
     async def create_session(self) -> None:
-        """Create aiohttp session with optimized settings."""
+        """Create aiohttp session with high-performance settings."""
         connector = aiohttp.TCPConnector(
-            limit=self.config.get('max_concurrent_requests'),
+            limit=self.config.get('connection_limit', 100),
+            limit_per_host=self.config.get('connection_limit_per_host', 30),
             ttl_dns_cache=300,
-            use_dns_cache=True
+            use_dns_cache=True,
+            keepalive_timeout=self.config.get('keepalive_timeout', 30),
+            enable_cleanup_closed=True
         )
         
-        timeout = aiohttp.ClientTimeout(total=self.config.get('timeout'))
+        timeout = aiohttp.ClientTimeout(
+            total=self.config.get('timeout'),
+            connect=10,  # Fast connection timeout
+            sock_read=self.config.get('timeout')
+        )
         
         headers = {
             'User-Agent': self.config.get('user_agent'),
             'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
             'Accept-Language': 'en-US,en;q=0.5',
-            'Accept-Encoding': 'gzip, deflate',
+            'Accept-Encoding': 'gzip, deflate, br',  # Added brotli support
             'Connection': 'keep-alive',
-            'Upgrade-Insecure-Requests': '1'
+            'Upgrade-Insecure-Requests': '1',
+            'Cache-Control': 'no-cache'  # Prevent caching issues
         }
         
         self.session = aiohttp.ClientSession(
@@ -85,13 +94,13 @@ class FastExcelScraper:
             finally:
                 await asyncio.sleep(self.config.get('request_delay'))
     
-    def extract_product_data(self, html: str, base_url: str) -> List[Dict[str, Any]]:
+    async def extract_product_data(self, html: str, base_url: str) -> List[Dict[str, Any]]:
         """Extract product data from HTML - Polish Venture optimized."""
         soup = BeautifulSoup(html, 'lxml')
-        return self._extract_polish_venture_products(soup, base_url)
+        return await self._extract_polish_venture_products(soup, base_url)
     
-    def _extract_polish_venture_products(self, soup: BeautifulSoup, base_url: str) -> List[Dict[str, Any]]:
-        """Extract products from Polish Venture - optimized for speed."""
+    async def _extract_polish_venture_products(self, soup: BeautifulSoup, base_url: str) -> List[Dict[str, Any]]:
+        """Extract products from Polish Venture - optimized for speed with async."""
         products = []
         
         # Extract product links for detailed scraping
@@ -99,12 +108,21 @@ class FastExcelScraper:
         
         if product_links:
             max_products = self.config.get('max_products_per_page', 50)
+            limited_links = product_links[:max_products]
             
-            for i, product_url in enumerate(product_links[:max_products]):
-                # Extract detailed product data synchronously
-                product_data = self._extract_polish_venture_product_sync(product_url)
-                if product_data and product_data.get('name'):
-                    products.append(product_data)
+            # Create semaphore for product detail requests
+            product_semaphore = asyncio.Semaphore(self.config.get('max_concurrent_products', 20))
+            
+            # Fetch all product details concurrently
+            tasks = [self._extract_polish_venture_product_async(url, product_semaphore) for url in limited_links]
+            product_results = await asyncio.gather(*tasks, return_exceptions=True)
+            
+            # Collect valid results
+            for result in product_results:
+                if isinstance(result, dict) and result.get('name'):
+                    products.append(result)
+                elif isinstance(result, Exception):
+                    self.logger.debug(f"Product extraction failed: {result}")
         
         return products
     
@@ -124,7 +142,7 @@ class FastExcelScraper:
         return urls
     
     async def scrape_full_catalog(self, base_url: str) -> List[Dict[str, Any]]:
-        """Scrape entire catalog with automatic pagination."""
+        """Scrape entire catalog with automatic pagination and time limits."""
         self.logger.info(f"Starting FULL CATALOG scrape of {base_url}")
         
         if not self.session:
@@ -134,8 +152,15 @@ class FastExcelScraper:
         page = 1
         consecutive_empty_pages = 0
         max_empty_pages = 3  # Stop after 3 empty pages
+        start_time = time.time()
+        max_time = self.config.get('max_scraping_time')
         
         while consecutive_empty_pages < max_empty_pages and page <= 999:
+            # Check time limit
+            if max_time and (time.time() - start_time) > max_time:
+                self.logger.info(f"Time limit reached ({max_time}s), stopping scrape")
+                break
+                
             page_url = f"{base_url}?page={page}" if page > 1 else base_url
             
             self.logger.info(f"Scraping page {page}: {page_url}")
@@ -145,7 +170,7 @@ class FastExcelScraper:
             html = await self.fetch_page(page_url, semaphore)
             
             if html:
-                products = self.extract_product_data(html, page_url)
+                products = await self.extract_product_data(html, page_url)
                 
                 if products:
                     all_products.extend(products)
@@ -172,7 +197,7 @@ class FastExcelScraper:
     
     async def scrape_website_async(self, base_url: str) -> List[Dict[str, Any]]:
         """
-        Main async scraping method.
+        Main async scraping method with performance monitoring.
         
         Args:
             base_url: Base URL to scrape
@@ -181,6 +206,7 @@ class FastExcelScraper:
             List of scraped products
         """
         self.logger.info(f"Starting async scraping of {base_url}")
+        start_time = time.time()
         
         if not self.session:
             await self.create_session()
@@ -196,15 +222,27 @@ class FastExcelScraper:
         tasks = [self.fetch_page(url, semaphore) for url in page_urls]
         html_pages = await asyncio.gather(*tasks, return_exceptions=True)
         
-        # Extract products from all pages
+        # Extract products from all pages concurrently
         all_products = []
+        extraction_tasks = []
+        
         for i, html in enumerate(html_pages):
             if isinstance(html, str) and html:
-                products = self.extract_product_data(html, page_urls[i])
-                all_products.extend(products)
-                self.logger.info(f"Page {i+1}: Found {len(products)} products")
+                task = self.extract_product_data(html, page_urls[i])
+                extraction_tasks.append((i+1, task))
             elif isinstance(html, Exception):
                 self.logger.error(f"Page {i+1} failed: {html}")
+        
+        # Process all product extractions concurrently
+        if extraction_tasks:
+            extraction_results = await asyncio.gather(*[task for _, task in extraction_tasks], return_exceptions=True)
+            
+            for (page_num, _), result in zip(extraction_tasks, extraction_results):
+                if isinstance(result, list):
+                    all_products.extend(result)
+                    self.logger.info(f"Page {page_num}: Found {len(result)} products")
+                elif isinstance(result, Exception):
+                    self.logger.error(f"Page {page_num} extraction failed: {result}")
         
         # Remove duplicates
         unique_products = self._deduplicate_products(all_products)
@@ -260,22 +298,28 @@ class FastExcelScraper:
             ])
         )
     
-    def _extract_polish_venture_product_sync(self, product_url: str) -> Dict[str, Any]:
-        """Extract detailed product data from Polish Venture product page (synchronous)."""
-        try:
-            import requests
-            response = requests.get(product_url, timeout=self.config.get('timeout', 20))
-            response.raise_for_status()
-            
-            soup = BeautifulSoup(response.content, 'lxml')
-            return self._extract_polish_venture_data(soup, product_url)
-            
-        except Exception as e:
-            self.logger.error(f"Error scraping Polish Venture product {product_url}: {e}")
-            return {}
+    async def _extract_polish_venture_product_async(self, product_url: str, semaphore: asyncio.Semaphore) -> Dict[str, Any]:
+        """Extract detailed product data from Polish Venture product page (async)."""
+        async with semaphore:
+            try:
+                async with self.session.get(product_url) as response:
+                    if response.status == 200:
+                        html = await response.text()
+                        soup = BeautifulSoup(html, 'lxml')
+                        return self._extract_polish_venture_data(soup, product_url)
+                    else:
+                        self.logger.debug(f"HTTP {response.status} for product {product_url}")
+                        return {}
+                        
+            except Exception as e:
+                self.logger.debug(f"Error scraping product {product_url}: {e}")
+                return {}
+            finally:
+                # Shorter delay for product detail requests
+                await asyncio.sleep(self.config.get('product_request_delay', 0.05))
     
     def _extract_polish_venture_data(self, soup: BeautifulSoup, product_url: str) -> Dict[str, Any]:
-        """Extract detailed data from Polish Venture product page."""
+        """Extract detailed data from Polish Venture product page - speed optimized."""
         import re
         import json as json_module
         
@@ -283,6 +327,10 @@ class FastExcelScraper:
             'source_url': product_url,
             'scraped_at': time.time()
         }
+        
+        # Quick exit if page seems invalid
+        if not soup.title or len(soup.get_text()) < 100:
+            return {}
         
         # Extract product name
         name_selectors = [
@@ -394,18 +442,19 @@ class FastExcelScraper:
         if categories:
             product_data['category'] = ' > '.join(categories[:3])  # Limit to 3 levels
         
-        # Extract description
-        desc_selectors = [
-            '.woocommerce-product-details__short-description',
-            '.product-short-description', '.entry-summary p', '.summary p'
-        ]
-        for selector in desc_selectors:
-            element = soup.select_one(selector)
-            if element:
-                desc = element.get_text(strip=True)
-                if desc and len(desc) > 20:
-                    product_data['description'] = desc[:500]  # Limit length
-                    break
+        # Extract description (only if enabled for speed)
+        if self.config.get('extract_descriptions', True):
+            desc_selectors = [
+                '.woocommerce-product-details__short-description',
+                '.product-short-description', '.entry-summary p', '.summary p'
+            ]
+            for selector in desc_selectors:
+                element = soup.select_one(selector)
+                if element:
+                    desc = element.get_text(strip=True)
+                    if desc and len(desc) > 20:
+                        product_data['description'] = desc[:300]  # Reduced from 500 to 300
+                        break
         
         # Extract stock status
         stock_element = soup.select_one('.stock')
@@ -416,21 +465,26 @@ class FastExcelScraper:
             elif 'out of stock' in stock_text:
                 product_data['stock_status'] = 'Out of Stock'
         
-        # Extract images
-        image_selectors = [
-            '.woocommerce-product-gallery img', '.product-image img',
-            '.wp-post-image', '.attachment-shop_single'
-        ]
-        images = []
-        for selector in image_selectors:
-            elements = soup.select(selector)
-            for img in elements[:5]:  # Limit to 5 images
-                src = img.get('src') or img.get('data-src')
-                if src:
-                    images.append(urljoin(product_url, src))
-        
-        product_data['images'] = images
-        product_data['primary_image'] = images[0] if images else None
+        # Extract images (only if enabled in config for speed)
+        if self.config.get('extract_images', True):
+            image_selectors = [
+                '.woocommerce-product-gallery img', '.product-image img',
+                '.wp-post-image', '.attachment-shop_single'
+            ]
+            images = []
+            for selector in image_selectors:
+                elements = soup.select(selector)
+                for img in elements[:3]:  # Reduced from 5 to 3 for speed
+                    src = img.get('src') or img.get('data-src')
+                    if src:
+                        images.append(urljoin(product_url, src))
+                        break  # Just get first valid image from each selector
+            
+            product_data['images'] = images
+            product_data['primary_image'] = images[0] if images else None
+        else:
+            product_data['images'] = []
+            product_data['primary_image'] = None
         
         # Check for warranty and shipping info
         page_text = soup.get_text().lower()
