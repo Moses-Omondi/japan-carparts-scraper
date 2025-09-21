@@ -1,0 +1,23 @@
+{
+  "max_concurrent_requests": 8,
+  "request_delay": 0.3,
+  "timeout": 20,
+  "retry_attempts": 2,
+  "max_products_per_page": 50,
+  "max_pages": 20,
+  "output_dir": "output",
+  "file_prefix": "scraped_products",
+  "timestamp_format": "%Y%m%d_%H%M%S",
+  "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+  "polish_venture": {
+    "base_url": "https://polishventure.com/shop/",
+    "product_selectors": [
+      ".product-item",
+      ".product",
+      ".woocommerce-loop-product__link",
+      ".product-small",
+      ".box-image",
+      ".col-inner"
+    ]
+  }
+}
